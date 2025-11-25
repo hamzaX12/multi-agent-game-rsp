@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  ejabberd:
+    image: ejabberd/ecs:latest
+    container_name: xmpp_server
+    ports:
+      - "5222:5222"  # Client connections
+      - "5269:5269"  # Server connections
+      - "5280:5280"  # HTTP admin
+    environment:
+      - EJABBERD_ADMINS=admin@localhost
+      - ERLANG_NODE_ARG=ejabberd@localhost
+    volumes:
+      - ./ejabberd_data:/home/ejabberd/database
+    networks:
+      - xmpp_network
+    healthcheck:
+      test: ["CMD", "ejabberdctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  agent1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent1
+    environment:
+      - AGENT_JID=agent1@localhost
+      - AGENT_PASSWORD=agent1pass
+      - XMPP_SERVER=ejabberd
+      - AGENT_NAME=Agent1
+    depends_on:
+      ejabberd:
+        condition: service_healthy
+    networks:
+      - xmpp_network
+    command: python agent.py
+
+  agent2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent2
+    environment:
+      - AGENT_JID=agent2@localhost
+      - AGENT_PASSWORD=agent2pass
+      - XMPP_SERVER=ejabberd
+      - AGENT_NAME=Agent2
+    depends_on:
+      ejabberd:
+        condition: service_healthy
+    networks:
+      - xmpp_network
+    command: python agent.py
+
+networks:
+  xmpp_network:
+    driver: bridge
+
+volumes:
+  ejabberd_data:
