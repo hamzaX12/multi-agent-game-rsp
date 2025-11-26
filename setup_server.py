@@ -23,9 +23,11 @@ def register_user(username, password):
 def main():
     print("Setting up XMPP agent accounts...\n")
     
-    # Register both agents
-    register_user("agent1", "agent1pass")
-    register_user("agent2", "agent2pass")
+    # Register agents
+    register_user("seller", "sellerpass")
+    register_user("buyer", "buyerpass")
+    # Added new buyer
+    register_user("buyer2", "buyer2pass")
     
     print("\n✓ Setup complete! Agents can now communicate.")
 
