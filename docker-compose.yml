@@ -5,9 +5,9 @@ services:
     image: ejabberd/ecs:latest
     container_name: xmpp_server
     ports:
-      - "5222:5222"  # Client connections
-      - "5269:5269"  # Server connections
-      - "5280:5280"  # HTTP admin
+      - "5222:5222"
+      - "5269:5269"
+      - "5280:5280"
     environment:
       - EJABBERD_ADMINS=admin@localhost
       - ERLANG_NODE_ARG=ejabberd@localhost
@@ -21,16 +21,17 @@ services:
       timeout: 10s
       retries: 5
 
-  seller:
+  # Formerly Seller -> Now Evaluator
+  evaluator:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: seller
+    container_name: evaluator
     environment:
-      - AGENT_JID=seller@localhost
-      - AGENT_PASSWORD=sellerpass
+      - AGENT_JID=evaluator@localhost
+      - AGENT_PASSWORD=evalpass
       - XMPP_SERVER=ejabberd
-      - AGENT_NAME=seller
+      - AGENT_NAME=Evaluator
     depends_on:
       ejabberd:
         condition: service_healthy
@@ -38,38 +39,60 @@ services:
       - xmpp_network
     command: python agent.py
 
-  buyer:
+  # Formerly Buyer -> Player 1
+  player1:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: buyer
+    container_name: player1
     environment:
-      - AGENT_JID=buyer@localhost
-      - AGENT_PASSWORD=buyerpass
+      - AGENT_JID=player1@localhost
+      - AGENT_PASSWORD=player1pass
       - XMPP_SERVER=ejabberd
-      - AGENT_NAME=Buyer
+      - AGENT_NAME=Player1
     depends_on:
       ejabberd:
         condition: service_healthy
     networks:
       - xmpp_network
     command: python agent.py
-  buyer2:
-      build:
-        context: .
-        dockerfile: Dockerfile
-      container_name: buyer2
-      environment:
-        - AGENT_JID=buyer2@localhost
-        - AGENT_PASSWORD=buyer2pass
-        - XMPP_SERVER=ejabberd
-        - AGENT_NAME=Buyer2
-      depends_on:
-        ejabberd:
-          condition: service_healthy
-      networks:
-        - xmpp_network
-      command: python agent.py
+
+  # Formerly Buyer2 -> Player 2
+  player2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: player2
+    environment:
+      - AGENT_JID=player2@localhost
+      - AGENT_PASSWORD=player2pass
+      - XMPP_SERVER=ejabberd
+      - AGENT_NAME=Player2
+    depends_on:
+      ejabberd:
+        condition: service_healthy
+    networks:
+      - xmpp_network
+    command: python agent.py
+
+  # NEW -> Player 3
+  player3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: player3
+    environment:
+      - AGENT_JID=player3@localhost
+      - AGENT_PASSWORD=player3pass
+      - XMPP_SERVER=ejabberd
+      - AGENT_NAME=Player3
+    depends_on:
+      ejabberd:
+        condition: service_healthy
+    networks:
+      - xmpp_network
+    command: python agent.py
+
 networks:
   xmpp_network:
     driver: bridge

@@ -2,9 +2,10 @@ import os
 import logging
 import asyncio
 import ssl
-import random  # Added for random bid generation
+import random
 from slixmpp import ClientXMPP
 
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(message)s')
 
 class XMPPAgent(ClientXMPP):
@@ -12,7 +13,7 @@ class XMPPAgent(ClientXMPP):
         super().__init__(jid, password)
         self.agent_name = agent_name
         
-        # --- ROBUST SSL FIX (Unchanged) ---
+        # --- ROBUST SSL FIX ---
         self.ssl_verify = False
         self.auto_start_tls = False
         self.use_tls = False
@@ -30,10 +31,13 @@ class XMPPAgent(ClientXMPP):
         
         self.register_plugin('xep_0030')
         self.register_plugin('xep_0199')
-        
-        # Negotiation State
-        self.received_bids = {}
-        self.expected_buyers = ["buyer@localhost", "buyer2@localhost"]
+
+        # Game State
+        self.players_jid = ["player1@localhost", "player2@localhost", "player3@localhost"]
+        self.current_moves = {}
+        self.round_count = 0
+        self.max_rounds = 3
+        self.scores = {jid: 0 for jid in self.players_jid}
 
     def start(self, event):
         """Called when the bot connects successfully"""
@@ -42,116 +46,155 @@ class XMPPAgent(ClientXMPP):
         
         logging.info(f"{self.agent_name} connected and ready!")
         
-        # If I am the Seller, I start the auction
-        if "seller" in self.boundjid.bare:
-            # Wait 5 seconds to ensure buyers are online/ready
-            self.schedule('start_auction', 5, self.start_auction_sync, repeat=False)
+        # Evaluator Logic: Start the game
+        if "evaluator" in self.boundjid.bare:
+            # Wait 5 seconds for players to connect
+            self.schedule('start_game', 5, self.start_new_round, repeat=False)
         else:
-            logging.info(f"{self.agent_name} is waiting for offers...")
+            logging.info(f"{self.agent_name} waiting for the Referee...")
 
-    def start_auction_sync(self):
-        asyncio.create_task(self.broadcast_offer())
-
-    async def broadcast_offer(self):
-        """Seller sends an offer to all buyers"""
-        item = "Vintage Laptop"
-        start_price = 100
-        msg_body = f"OFFER:{item}:{start_price}"
-        
-        logging.info(f"--- {self.agent_name} STARTING AUCTION for {item} at ${start_price} ---")
-        
-        for buyer in self.expected_buyers:
-            self.send_message(mto=buyer, mbody=msg_body, mtype='chat')
-            logging.info(f"Sent offer to {buyer}")
+    def start_new_round(self):
+        """Evaluator starts a specific round"""
+        if self.round_count < self.max_rounds:
+            self.round_count += 1
+            self.current_moves = {} # Reset moves for new round
+            
+            logging.info(f"--- STARTING ROUND {self.round_count} ---")
+            msg = f"CMD:START_ROUND:{self.round_count}"
+            
+            # Broadcast to all players
+            for player in self.players_jid:
+                self.send_message(mto=player, mbody=msg, mtype='chat')
+        else:
+            self.declare_final_winner()
 
     def message_received(self, msg):
         """Handle incoming messages"""
         if msg['type'] in ('chat', 'normal'):
             sender = msg['from'].bare
             body = msg['body']
-            
-            # SELLER LOGIC
-            if "seller" in self.boundjid.bare:
-                self.handle_seller_logic(sender, body)
-            
-            # BUYER LOGIC
+
+            if "evaluator" in self.boundjid.bare:
+                self.handle_evaluator_logic(sender, body)
             else:
-                asyncio.create_task(self.handle_buyer_logic(sender, body))
+                asyncio.create_task(self.handle_player_logic(sender, body))
 
-    def handle_seller_logic(self, sender, body):
-        if body.startswith("BID:"):
-            try:
-                bid_amount = int(body.split(":")[1])
-                logging.info(f"Seller received BID from {sender}: ${bid_amount}")
-                
-                # Store the bid
-                self.received_bids[sender] = bid_amount
-                
-                # Check if we have received bids from all expected buyers
-                if len(self.received_bids) >= len(self.expected_buyers):
-                    self.determine_winner()
-            except ValueError:
-                logging.error(f"Invalid bid format from {sender}")
+    # ---------------- EVALUATOR LOGIC ----------------
+    def handle_evaluator_logic(self, sender, body):
+        if body.startswith("MOVE:"):
+            move = body.split(":")[1]
+            logging.info(f"Evaluator received move from {sender}: {move}")
+            
+            # Record move
+            self.current_moves[sender] = move
+            
+            # Check if all 3 players have played
+            if len(self.current_moves) == len(self.players_jid):
+                self.evaluate_round()
 
-    def determine_winner(self):
-        """Calculate highest bid and notify agents"""
-        if not self.received_bids:
-            return
-
-        # Find max bid
-        winner_jid = max(self.received_bids, key=self.received_bids.get)
-        winning_price = self.received_bids[winner_jid]
+    def evaluate_round(self):
+        """Determine logic for Rock Paper Scissors (3 Players)"""
+        moves = self.current_moves
+        # Logic:
+        # Rock beats Scissors
+        # Scissors beats Paper
+        # Paper beats Rock
         
-        logging.info(f"--- AUCTION ENDED. Winner: {winner_jid} with ${winning_price} ---")
-
-        # Notify Winner
-        self.send_message(mto=winner_jid, mbody="RESULT:WIN:You won the auction!", mtype='chat')
+        unique_moves = set(moves.values())
         
-        # Notify Losers
-        for loser in self.received_bids:
-            if loser != winner_jid:
-                self.send_message(mto=loser, mbody=f"RESULT:LOSE:Item sold to another for ${winning_price}", mtype='chat')
+        winners = []
+        result_msg = ""
+
+        # CASE 1: Draw (All 3 same OR All 3 different)
+        # e.g. R, R, R or R, P, S
+        if len(unique_moves) == 1 or len(unique_moves) == 3:
+            result_msg = "Draw! No points awarded."
+            logging.info(f"Round Result: {result_msg}")
         
-        # Reset for potential next round (optional)
-        self.received_bids = {}
+        # CASE 2: Two types of moves present (Someone wins)
+        else:
+            # Determine which move wins
+            winning_move = ""
+            if 'rock' in unique_moves and 'scissors' in unique_moves:
+                winning_move = 'rock'
+            elif 'scissors' in unique_moves and 'paper' in unique_moves:
+                winning_move = 'scissors'
+            elif 'paper' in unique_moves and 'rock' in unique_moves:
+                winning_move = 'paper'
+            
+            # Assign points
+            for player, move in moves.items():
+                if move == winning_move:
+                    self.scores[player] += 1
+                    winners.append(player)
+            
+            result_msg = f"Winners: {', '.join(winners)} with {winning_move}"
+            logging.info(f"Round Result: {result_msg}")
 
-    async def handle_buyer_logic(self, sender, body):
-        # Buyer receives an Offer
-        if body.startswith("OFFER:"):
-            parts = body.split(":")
-            item = parts[1]
-            base_price = int(parts[2])
+        # Notify players of round result
+        for player in self.players_jid:
+            self.send_message(mto=player, mbody=f"RESULT:{result_msg}", mtype='chat')
             
-            logging.info(f"{self.agent_name} received offer for {item} at ${base_price}")
-            
-            # Wait a moment to simulate thinking
-            await asyncio.sleep(random.uniform(0.5, 2.0))
-            
-            # Generate a random bid (base price + 10 to 50)
-            my_bid = base_price + random.randint(10, 50)
-            
-            reply = f"BID:{my_bid}"
-            self.send_message(mto=sender, mbody=reply, mtype='chat')
-            logging.info(f"{self.agent_name} placed bid: ${my_bid}")
+        # Schedule next round
+        asyncio.get_event_loop().call_later(2, self.start_new_round)
 
-        # Buyer receives Result
+    def declare_final_winner(self):
+        """End of game logic"""
+        logging.info("--- GAME OVER ---")
+        logging.info(f"Final Scores: {self.scores}")
+        
+        # Find max score
+        max_score = max(self.scores.values())
+        winners = [p for p, s in self.scores.items() if s == max_score]
+        
+        final_msg = ""
+        if len(winners) == 1:
+            final_msg = f"FINAL WINNER: {winners[0]} with {max_score} points!"
+        else:
+            final_msg = f"FINAL DRAW between: {', '.join(winners)} with {max_score} points!"
+            
+        logging.info(final_msg)
+        for player in self.players_jid:
+            self.send_message(mto=player, mbody=f"FINAL:{final_msg}", mtype='chat')
+
+    # ---------------- PLAYER LOGIC ----------------
+    async def handle_player_logic(self, sender, body):
+        if body.startswith("CMD:START_ROUND"):
+            round_num = body.split(":")[2]
+            logging.info(f"{self.agent_name} starting Round {round_num}...")
+            
+            # Simulate thinking time
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+            
+            # Pick Move
+            options = ['rock', 'paper', 'scissors']
+            my_move = random.choice(options)
+            
+            logging.info(f"{self.agent_name} chose {my_move}")
+            self.send_message(mto=sender, mbody=f"MOVE:{my_move}", mtype='chat')
+            
         elif body.startswith("RESULT:"):
-            status = body.split(":")[1]
-            message = body.split(":")[2]
-            if status == "WIN":
-                logging.info(f"🎉 {self.agent_name} WON! ({message})")
-            else:
-                logging.info(f"😞 {self.agent_name} LOST. ({message})")
+            res = body.split(":")[1]
+            logging.info(f"{self.agent_name} saw result: {res}")
+            
+        elif body.startswith("FINAL:"):
+            res = body.split(":")[1]
+            logging.info(f"{self.agent_name} saw FINAL result: {res}")
 
     def on_disconnect(self, event):
         logging.info(f"{self.agent_name} disconnected")
 
 def main():
-    jid = os.getenv('AGENT_JID', 'seller@localhost')
-    password = os.getenv('AGENT_PASSWORD', 'sellerpass')
+    # Load environment variables
+    jid = os.getenv('AGENT_JID')
+    password = os.getenv('AGENT_PASSWORD')
     server = os.getenv('XMPP_SERVER', 'localhost')
-    agent_name = os.getenv('AGENT_NAME', 'Seller')
+    agent_name = os.getenv('AGENT_NAME')
     
+    if not jid:
+        print("Error: AGENT_JID not set")
+        return
+
     agent = XMPPAgent(jid, password, agent_name)
     agent.connect((server, 5222))
     agent.process(forever=True)
